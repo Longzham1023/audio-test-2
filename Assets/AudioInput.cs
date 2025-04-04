@@ -5,91 +5,130 @@ using UnityEngine;
 [RequireComponent(typeof(AudioSource))]
 public class GetAudioInput : MonoBehaviour
 {
-    public float volumeThreshold = 0.1f; 
-    public float pitchThreshold = 0.1f; 
-    [SerializeField] private Rigidbody2D rb;
+    // Microphone properties
+    private AudioSource audioSource;
+    private string microphone;
+    private float[] samples;
+    private float[] spectrum;
+    private float volume;
+    private float pitch;
 
-    public AudioSource audioSource;
-    public static float volume;
-    public static float pitch;
-    public float moveSpeed = 5f;     
-    public float jumpForce = 50f;  
+    // Character control properties
+    public float moveSpeed = 5f;
+    public float jumpForce = 10f;
+    private Rigidbody rb;
+
+    // For detecting pitch (frequency range)
+    private const int sampleWindow = 1024;
 
     void Start()
     {
+        // Initialize AudioSource
         audioSource = GetComponent<AudioSource>();
-        audioSource.clip = Microphone.Start(null, true, 1, AudioSettings.outputSampleRate);
+        rb = GetComponent<Rigidbody>();
+
+        // Get the default microphone device
+        microphone = Microphone.devices[0];
+        audioSource.clip = Microphone.Start(microphone, true, 10, 44100);
         audioSource.loop = true;
-        while (!(Microphone.GetPosition(null) > 0)) { }
+
+        // Wait for microphone to start
+        while (Microphone.GetPosition(microphone) <= 0) { }
+
+        // Start playing the audio from the microphone
         audioSource.Play();
+
+        // Initialize arrays for audio analysis
+        samples = new float[sampleWindow];
+        spectrum = new float[sampleWindow];
     }
 
     void Update()
     {
-        float[] samples = new float[audioSource.clip.samples * audioSource.clip.channels];
-        audioSource.clip.GetData(samples, 0);
+        // Get audio data from microphone
+        audioSource.GetOutputData(samples, 0);  // Get data for volume calculation
+        audioSource.GetSpectrumData(spectrum, 0, FFTWindow.Rectangular);  // Get frequency data
 
-        volume = 0f;
-        pitch = 0f;
+        // Calculate volume (RMS - Root Mean Square)
+        volume = GetVolume();
 
-        for (int i = 0; i < samples.Length; i++)
+        // Calculate pitch (dominant frequency)
+        pitch = GetPitch();
+
+        // Perform actions based on pitch and volume
+        HandleCharacterActions(pitch, volume);
+    }
+
+    // Calculate the loudness (volume) based on RMS
+    float GetVolume()
+    {
+        float sum = 0;
+        foreach (float sample in samples)
         {
-            volume += Mathf.Abs(samples[i]);
+            sum += sample * sample;
         }
-        volume /= samples.Length;
+        return Mathf.Sqrt(sum / sampleWindow);
+    }
 
-        float[] spectrum = new float[512];
-        audioSource.GetSpectrumData(spectrum, 0, FFTWindow.BlackmanHarris);
-        float maxVal = 0f;
-        int maxIndex = 0;
-        for (int i = 0; i < spectrum.Length; i++)
+    // Get the dominant pitch (frequency) from the spectrum data
+    float GetPitch()
+    {
+        int highestIndex = 0;
+        float highestMagnitude = 0;
+
+        for (int i = 0; i < sampleWindow; i++)
         {
-            if (spectrum[i] > maxVal && spectrum[i] > pitchThreshold)
+            if (spectrum[i] > highestMagnitude)
             {
-                maxVal = spectrum[i];
-                maxIndex = i;
+                highestMagnitude = spectrum[i];
+                highestIndex = i;
             }
         }
-        pitch = maxIndex * (AudioSettings.outputSampleRate / 2f) / spectrum.Length;
 
-        if (volume > volumeThreshold)
-        {
-            Debug.Log("___________________");
-            Debug.Log("Volume detected: " + volume);
-        }
-
-        if (pitch > pitchThreshold)
-        {
-            Debug.Log("Pitch detected: " + pitch);
-            Debug.Log("___________________");
-        }
-
-        if (pitch < 100f) 
-        {
-            MoveForward();
-        }
-        if (pitch > 300f)
-        {
-            Jump();
-        }
-
-        // Both volume and pitch detection log:
-        if ((volume > volumeThreshold) && (pitch > pitchThreshold))
-        {
-            Debug.Log("Volume detected: " + volume + " " + "Pitch detected: " + pitch);
-        }
+        // Convert the index to frequency
+        float frequency = highestIndex * AudioSettings.outputSampleRate / sampleWindow;
+        return frequency;
     }
 
-    // Move the player forward
-    private void MoveForward()
+    // Handle character actions based on pitch and volume
+    void HandleCharacterActions(float pitch, float volume)
     {
-        rb.velocity = new Vector2(transform.position.y * Time.deltaTime * moveSpeed, rb.velocity.y);
+        if (pitch >= 200 && pitch < 400)
+        {
+            MoveCharacter(Vector3.right, volume); // Medium frequency -> Move right
+        }
+        else if (pitch >= 400 && pitch < 600)
+        {
+            JumpCharacter(volume); // Higher frequency -> Jump
+        }
+        else if (pitch >= 600)
+        {
+            AttackCharacter(volume); // Very high frequency -> Attack
+        }
     }
 
-    // Make the player jump
-    private void Jump()
+    // Move the character in a direction based on volume
+    void MoveCharacter(Vector3 direction, float volume)
     {
-        rb.AddForce(Vector2.up * jumpForce);
+        // Adjust the speed based on the volume (louder = faster)
+        float moveSpeed = this.moveSpeed * (volume > 0.1f ? 2f : 1f);
+        transform.Translate(direction * moveSpeed * Time.deltaTime);
     }
 
+    // Make the character jump based on volume (higher volume = higher jump)
+    void JumpCharacter(float volume)
+    {
+        if (volume > 0.5f && Mathf.Abs(rb.velocity.y) < 0.01f) // Check if character is on the ground
+        {
+            rb.AddForce(Vector3.up * jumpForce * (volume > 1.0f ? 1.5f : 1f), ForceMode.Impulse);
+        }
+    }
+
+    // Trigger an attack action (volume can affect attack power)
+    void AttackCharacter(float volume)
+    {
+        // For demonstration, just print the attack power
+        float attackPower = volume * 10f;
+        Debug.Log("Attack Power: " + attackPower);
+    }
 }
